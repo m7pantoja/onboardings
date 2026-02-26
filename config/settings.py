@@ -19,6 +19,8 @@ class Settings(BaseSettings):
 
     # Google
     google_client_secret_path: Path
+    google_token_path: Path = Path("secrets/token_google.json")
+    google_spreadsheet_id: str
 
     # Slack
     slack_bot_token: str
