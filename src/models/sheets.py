@@ -28,6 +28,25 @@ DEPARTMENT_LABELS: dict[Department, str] = {
 }
 
 
+# Propiedades de HubSpot Contact que contienen el hubspot_tec_id, por departamento.
+# Si el departamento no aparece aquí, el "técnico" es el responsable del depto.
+DEPARTMENT_TECHNICIAN_PROPERTIES: dict[Department, tuple[str, ...]] = {
+    Department.SU: ("tecnico_enisa_asignado", "tecnico_subvencion_asignado"),
+    Department.FI: ("cfo_asignado", "cfo_asignado_ii"),
+    Department.AS: ("asesor_fiscal_asignado", "administrativo_asignado"),
+    Department.LA: ("asesor_laboral_asignado",),
+}
+
+# Subcarpetas de Drive que se crean dentro de la carpeta del cliente.
+# Si el departamento no aparece aquí, no se crea subcarpeta.
+DEPARTMENT_DRIVE_SUBFOLDER: dict[Department, str] = {
+    Department.SU: "03 - Financiación Pública",
+    Department.FI: "01 - CFO",
+    Department.AS: "02 - Asesoría fiscal, contable y laboral",
+    Department.LA: "02 - Asesoría fiscal, contable y laboral",
+}
+
+
 class TeamMember(BaseModel):
     """Miembro del equipo (hoja 'usuarios')."""
 

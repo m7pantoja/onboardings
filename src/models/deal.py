@@ -33,6 +33,8 @@ class CompanyInfo(BaseModel):
     zip_code: str | None = None
     country: str | None = None
     holded_id: str | None = None  # tl_holded_id — si tiene valor, ya existe en Holded
+    drive_folder_id: str | None = None  # si tiene valor, carpeta ya existe en Drive
+    drive_folder_url: str | None = None
 
 
 class ContactPersonInfo(BaseModel):

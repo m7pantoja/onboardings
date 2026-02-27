@@ -40,6 +40,8 @@ COMPANY_PROPERTIES: tuple[str, ...] = (
     "domain",
     "tl_holded_id",
     "tl_synced_holded",
+    "drive_folder_id",
+    "drive_folder_url",
 )
 
 # Propiedades de técnicos + datos de la persona de contacto
@@ -174,6 +176,14 @@ class HubSpotClient:
         params = {"properties": ",".join(CONTACT_PROPERTIES)}
         return await self._request(
             "GET", f"/crm/v3/objects/contacts/{contact_id}", params=params
+        )
+
+    async def update_company(self, company_id: str, properties: dict[str, str]) -> dict[str, Any]:
+        """Actualiza propiedades de una empresa (write-back tras crear en Drive/Holded)."""
+        return await self._request(
+            "PATCH",
+            f"/crm/v3/objects/companies/{company_id}",
+            json={"properties": properties},
         )
 
     # ── Internals ───────────────────────────────────────────────

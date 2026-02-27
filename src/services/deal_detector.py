@@ -62,6 +62,8 @@ def _build_company_info(company_id: str, props: dict[str, str | None]) -> Compan
         zip_code=props.get("zip"),
         country=props.get("country"),
         holded_id=props.get("tl_holded_id"),
+        drive_folder_id=props.get("drive_folder_id"),
+        drive_folder_url=props.get("drive_folder_url"),
     )
 
 

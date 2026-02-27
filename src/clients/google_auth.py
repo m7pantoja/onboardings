@@ -12,7 +12,11 @@ from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 
-SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
+SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets.readonly",
+    "https://www.googleapis.com/auth/drive",
+    "https://www.googleapis.com/auth/gmail.send",
+]
 
 # Rutas por defecto relativas a la raíz del proyecto
 _DEFAULT_CLIENT_SECRET = Path("secrets/client_secret_google.json")
