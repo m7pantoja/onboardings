@@ -105,6 +105,84 @@ def _mock_associations_and_data(
     )
 
 
+def _mock_get_deal(
+    deal_id: str = "100",
+    deal_name: str = "ACME SL - CFO",
+    **extra_props: str,
+) -> None:
+    """Mockea GET /crm/v3/objects/deals/{deal_id}."""
+    raw = _make_raw_deal(deal_id=deal_id, deal_name=deal_name, **extra_props)
+    respx.get(f"{BASE_URL}/crm/v3/objects/deals/{deal_id}").mock(
+        return_value=httpx.Response(200, json=raw)
+    )
+
+
+class TestEnrichDealById:
+    @respx.mock
+    async def test_enriches_deal_successfully(self, mock_repo: AsyncMock):
+        _mock_get_deal()
+        _mock_associations_and_data()
+
+        async with HubSpotClient(token="test") as client:
+            detector = DealDetector(client=client, repository=mock_repo)
+            result = await detector.enrich_deal_by_id(100)
+
+        assert result is not None
+        assert isinstance(result, EnrichedDeal)
+        assert result.deal_id == 100
+        assert result.company_name == "ACME SL"
+        assert result.service_name == "CFO"
+        assert result.company.nif == "B12345678"
+        assert result.contact_person.firstname == "Juan"
+        assert len(result.technicians) == 1
+
+    @respx.mock
+    async def test_returns_none_for_unparseable_name(self, mock_repo: AsyncMock):
+        _mock_get_deal(deal_name="SIN SEPARADOR")
+
+        async with HubSpotClient(token="test") as client:
+            detector = DealDetector(client=client, repository=mock_repo)
+            result = await detector.enrich_deal_by_id(100)
+
+        assert result is None
+
+    @respx.mock
+    async def test_returns_none_when_no_company(self, mock_repo: AsyncMock):
+        _mock_get_deal()
+        respx.get(f"{BASE_URL}/crm/v3/objects/deals/100/associations/companies").mock(
+            return_value=httpx.Response(200, json={"results": []})
+        )
+
+        async with HubSpotClient(token="test") as client:
+            detector = DealDetector(client=client, repository=mock_repo)
+            result = await detector.enrich_deal_by_id(100)
+
+        assert result is None
+
+    @respx.mock
+    async def test_returns_none_when_no_contacts(self, mock_repo: AsyncMock):
+        _mock_get_deal()
+        respx.get(f"{BASE_URL}/crm/v3/objects/deals/100/associations/companies").mock(
+            return_value=httpx.Response(200, json={
+                "results": [{"toObjectId": 500}],
+            })
+        )
+        respx.get(f"{BASE_URL}/crm/v3/objects/companies/500").mock(
+            return_value=httpx.Response(200, json={
+                "id": "500", "properties": {"name": "ACME SL"},
+            })
+        )
+        respx.get(f"{BASE_URL}/crm/v3/objects/companies/500/associations/contacts").mock(
+            return_value=httpx.Response(200, json={"results": []})
+        )
+
+        async with HubSpotClient(token="test") as client:
+            detector = DealDetector(client=client, repository=mock_repo)
+            result = await detector.enrich_deal_by_id(100)
+
+        assert result is None
+
+
 class TestDealDetector:
     @respx.mock
     async def test_detects_new_deal(self, mock_repo: AsyncMock):

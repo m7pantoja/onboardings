@@ -166,6 +166,22 @@ class OnboardingRepository:
             )
             await db.commit()
 
+    async def list_failed(self) -> list[OnboardingRecord]:
+        """Devuelve onboardings en estado FAILED (para resumen al admin)."""
+        async with aiosqlite.connect(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT * FROM onboardings WHERE status = ? ORDER BY created_at",
+                (OnboardingStatus.FAILED.value,),
+            )
+            rows = await cursor.fetchall()
+            records = []
+            for row in rows:
+                record = self._row_to_record(row)
+                record.technicians = await self._load_technicians(db, record.id)
+                records.append(record)
+            return records
+
     async def list_pending(self) -> list[OnboardingRecord]:
         """Devuelve onboardings pendientes, esperando técnico o en progreso (para retomar)."""
         async with aiosqlite.connect(self._db_path) as db:

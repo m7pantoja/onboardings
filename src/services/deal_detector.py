@@ -195,6 +195,63 @@ class DealDetector:
         logger.info("deal_detection_completed", new_deals_count=len(new_deals))
         return new_deals
 
+    async def enrich_deal_by_id(self, deal_id: int) -> EnrichedDeal | None:
+        """Re-enriquece un deal por su ID (para reintentos de onboardings pendientes).
+
+        Devuelve None si el deal no se puede parsear o no tiene empresa/contacto.
+        """
+        log = logger.bind(deal_id=deal_id)
+
+        raw_deal = await self._client.get_deal(str(deal_id))
+        props = raw_deal.get("properties", {})
+        deal_name = props.get("dealname", "")
+
+        try:
+            company_name, service_name = parse_deal_name(deal_name)
+        except ValueError:
+            log.warning("deal_name_unparseable", deal_name=deal_name)
+            return None
+
+        company_id = await self._client.get_deal_company_id(str(deal_id))
+        if company_id is None:
+            log.warning("deal_has_no_company")
+            return None
+
+        company_data = await self._client.get_company(company_id)
+        company_props = company_data.get("properties", {})
+        company = _build_company_info(company_id, company_props)
+
+        contact_ids = await self._client.get_company_contact_ids(company_id)
+        if not contact_ids:
+            log.warning("company_has_no_contacts", company_id=company_id)
+            return None
+
+        contact_id = contact_ids[0]
+        contact_data = await self._client.get_contact(contact_id)
+        contact_props = contact_data.get("properties", {})
+
+        contact_person = _build_contact_person(contact_id, contact_props)
+        technicians = extract_technicians(contact_props)
+
+        close_date = _parse_close_date(props.get("closedate"))
+
+        return EnrichedDeal(
+            deal_id=deal_id,
+            deal_name=deal_name,
+            company_name=company_name,
+            service_name=service_name,
+            close_date=close_date,
+            hubspot_owner_id=(
+                int(props["hubspot_owner_id"]) if props.get("hubspot_owner_id") else None
+            ),
+            pipeline=props.get("pipeline"),
+            dealstage=props.get("dealstage"),
+            amount=float(props["amount"]) if props.get("amount") else None,
+            company=company,
+            contact_person=contact_person,
+            technicians=technicians,
+        )
+
 
 def _parse_close_date(value: str | None) -> datetime:
     """Parsea closedate de HubSpot (ms epoch o ISO string)."""

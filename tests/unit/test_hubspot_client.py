@@ -8,6 +8,7 @@ from src.clients.hubspot import (
     BASE_URL,
     COMPANY_PROPERTIES,
     CONTACT_PROPERTIES,
+    DEAL_PROPERTIES,
     HubSpotClient,
     HubSpotError,
 )
@@ -74,6 +75,24 @@ class TestSearchWonDeals:
             deals = [d async for d in client.search_won_deals(since=datetime(2025, 1, 1))]
 
         assert deals == []
+
+
+class TestGetDeal:
+    @respx.mock
+    async def test_returns_deal_properties(self, token: str):
+        respx.get(f"{BASE_URL}/crm/v3/objects/deals/100").mock(
+            return_value=httpx.Response(200, json={
+                "id": "100",
+                "properties": {"dealname": "ACME - CFO", "amount": "5000"},
+            })
+        )
+
+        async with HubSpotClient(token=token) as client:
+            data = await client.get_deal("100")
+
+        assert data["id"] == "100"
+        assert data["properties"]["dealname"] == "ACME - CFO"
+        assert data["properties"]["amount"] == "5000"
 
 
 class TestGetCompany:

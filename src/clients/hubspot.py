@@ -147,6 +147,13 @@ class HubSpotClient:
             if not after:
                 break
 
+    async def get_deal(self, deal_id: str) -> dict[str, Any]:
+        """Obtiene las propiedades de un deal por su ID."""
+        params = {"properties": ",".join(DEAL_PROPERTIES)}
+        return await self._request(
+            "GET", f"/crm/v3/objects/deals/{deal_id}", params=params
+        )
+
     async def get_company(self, company_id: str) -> dict[str, Any]:
         """Obtiene las propiedades de una empresa."""
         params = {"properties": ",".join(COMPANY_PROPERTIES)}
