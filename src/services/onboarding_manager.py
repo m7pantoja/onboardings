@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
+
 import structlog
 
 from src.clients.slack import SlackClient
@@ -183,6 +185,14 @@ class OnboardingManager:
         log = logger.bind(deal_id=deal.deal_id, department=department.value)
 
         if existing is None:
+            dept_properties = DEPARTMENT_TECHNICIAN_PROPERTIES.get(department, ())
+            seen_ids: set[str] = set()
+            relevant_technicians = []
+            for t in deal.technicians:
+                if t.property_name in dept_properties and t.hubspot_tec_id not in seen_ids:
+                    seen_ids.add(t.hubspot_tec_id)
+                    relevant_technicians.append(t)
+
             record = OnboardingRecord(
                 deal_id=deal.deal_id,
                 deal_name=deal.deal_name,
@@ -190,7 +200,7 @@ class OnboardingManager:
                 service_name=deal.service_name,
                 department=department.value,
                 hubspot_owner_id=deal.hubspot_owner_id,
-                technicians=deal.technicians,
+                technicians=relevant_technicians,
                 status=OnboardingStatus.WAITING_TECHNICIAN,
             )
             record.id = await self._repo.create(record)
@@ -201,14 +211,31 @@ class OnboardingManager:
 
         log.warning("onboarding_waiting_technician")
 
+        # Notificar al responsable solo si:
+        # - Es un record nuevo (last_notified_at es None)
+        # - O han pasado 2+ días desde la última notificación
+        should_notify = record.last_notified_at is None
+        if not should_notify:
+            days_since_notified = (datetime.now() - record.last_notified_at).days
+            should_notify = days_since_notified >= 2
+
+        if not should_notify:
+            log.info("slack_reminder_skipped", reason="notified_less_than_2_days_ago")
+            return record
+
         # Notificar al responsable del departamento por Slack
         responsable = await self._mapper.get_responsable(department)
         if responsable and responsable.slack_id:
             from src.models.sheets import DEPARTMENT_LABELS
 
             dept_label = DEPARTMENT_LABELS.get(department, department.value)
+            if existing is None:
+                header = "⚠️ Nuevo negocio sin técnico asignado:"
+            else:
+                days = (datetime.now() - record.created_at).days
+                header = f"🔔 Recordatorio ({days} días esperando): negocio sin técnico asignado:"
             message = (
-                f"⚠️ Nuevo negocio sin técnico asignado:\n"
+                f"{header}\n"
                 f"*{deal.deal_name}*\n"
                 f"Empresa: *{deal.company_name}*\n"
                 f"Servicio: *{deal.service_name}*\n"
@@ -226,6 +253,9 @@ class OnboardingManager:
         else:
             log.warning("no_responsable_slack_id", department=department.value)
 
+        # Registrar la fecha de notificación
+        await self._repo.update_last_notified(record.id)
+
         return record
 
     async def _create_record(
@@ -235,11 +265,15 @@ class OnboardingManager:
         technician: TeamMember,
     ) -> OnboardingRecord:
         """Crea y persiste un nuevo OnboardingRecord."""
-        # Solo guardamos los técnicos del departamento correspondiente
+        # Solo guardamos los técnicos del departamento correspondiente,
+        # deduplicando por hubspot_tec_id (un mismo técnico puede cubrir varias propiedades)
         dept_properties = DEPARTMENT_TECHNICIAN_PROPERTIES.get(department, ())
-        relevant_technicians = [
-            t for t in deal.technicians if t.property_name in dept_properties
-        ]
+        seen_ids: set[str] = set()
+        relevant_technicians = []
+        for t in deal.technicians:
+            if t.property_name in dept_properties and t.hubspot_tec_id not in seen_ids:
+                seen_ids.add(t.hubspot_tec_id)
+                relevant_technicians.append(t)
 
         record = OnboardingRecord(
             deal_id=deal.deal_id,

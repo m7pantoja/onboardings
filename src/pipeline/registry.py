@@ -5,7 +5,6 @@ from __future__ import annotations
 from src.clients.gmail import GmailClient
 from src.clients.google_drive import GoogleDriveClient
 from src.clients.holded import HoldedClient
-from src.clients.hubspot import HubSpotClient
 from src.clients.slack import SlackClient
 from src.steps.base import BaseStep
 from src.steps.create_drive_folder import CreateDriveFolderStep
@@ -19,7 +18,6 @@ def build_pipeline(
     holded_client: HoldedClient,
     slack_client: SlackClient,
     gmail_client: GmailClient,
-    hubspot_client: HubSpotClient,
 ) -> list[BaseStep]:
     """Devuelve la lista ordenada de steps del pipeline de onboarding.
 
@@ -30,8 +28,8 @@ def build_pipeline(
     4. Email último (incluye los enlaces de Drive y Holded)
     """
     return [
-        CreateDriveFolderStep(drive_client, hubspot_client),
-        CreateHoldedContactStep(holded_client, hubspot_client),
+        CreateDriveFolderStep(drive_client),
+        CreateHoldedContactStep(holded_client),
         NotifySlackStep(slack_client),
         SendEmailStep(gmail_client),
     ]

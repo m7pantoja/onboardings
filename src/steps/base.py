@@ -68,8 +68,6 @@ class StepContext:
             contact_person=deal.contact_person,
             department=department,
             technician=technician,
-            # Si ya existe en Holded/Drive, preservar los IDs
-            holded_contact_id=deal.company.holded_id if deal.company.holded_id else None,
             hubspot_portal_id=hubspot_portal_id,
         )
 

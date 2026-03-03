@@ -1,13 +1,13 @@
 """Tests para PollingJob."""
 
 from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 
 from src.models.deal import CompanyInfo, ContactPersonInfo, EnrichedDeal
-from src.models.enums import OnboardingStatus
-from src.models.onboarding import OnboardingRecord
+from src.models.enums import OnboardingStatus, StepName, StepStatus
+from src.models.onboarding import OnboardingRecord, StepRecord
 from src.scheduler.polling_job import PollingJob
 
 
@@ -44,6 +44,26 @@ def _make_record(
     )
 
 
+def _make_failed_record_with_steps(deal_id: int = 100) -> OnboardingRecord:
+    """Record con steps para simular list_failed() con detalle."""
+    record = _make_record(deal_id=deal_id, status=OnboardingStatus.FAILED)
+    record.steps = [
+        StepRecord(
+            onboarding_id=1,
+            step_name=StepName.CREATE_DRIVE_FOLDER,
+            status=StepStatus.COMPLETED,
+            result_data={"folder_url": "https://drive.google.com/folders/123"},
+        ),
+        StepRecord(
+            onboarding_id=1,
+            step_name=StepName.CREATE_HOLDED_CONTACT,
+            status=StepStatus.FAILED,
+            error_message="Holded API 500: Internal Server Error",
+        ),
+    ]
+    return record
+
+
 @pytest.fixture
 def polling_job() -> PollingJob:
     """Crea un PollingJob con todas las dependencias mockeadas."""
@@ -75,7 +95,7 @@ def polling_job() -> PollingJob:
 
 class TestPollingJobRun:
     async def test_ciclo_vacio_sin_errores(self, polling_job: PollingJob):
-        """Sin nuevos deals ni pendientes, completa sin enviar emails."""
+        """Sin nuevos deals ni pendientes ni failed, no envía email."""
         await polling_job.run()
 
         polling_job._detector.detect_new_deals.assert_awaited_once()
@@ -142,25 +162,70 @@ class TestPollingJobRun:
         polling_job._manager.process_deal.assert_not_awaited()
 
 
-# ── Tests de notificaciones ──────────────────────────────────────
+# ── Tests del reporte por email ──────────────────────────────────
 
 
-class TestPollingJobNotifications:
-    async def test_notifica_admin_con_failed_al_final(self, polling_job: PollingJob):
-        failed1 = _make_record(deal_id=100, status=OnboardingStatus.FAILED)
-        failed2 = _make_record(deal_id=200, status=OnboardingStatus.FAILED)
-        polling_job._repo.list_failed.return_value = [failed1, failed2]
+class TestCycleReport:
+    async def test_envia_reporte_con_completados(self, polling_job: PollingJob):
+        """Cuando hay deals completados, envía reporte con detalle."""
+        deal = _make_enriched_deal(100)
+        polling_job._detector.detect_new_deals.return_value = [deal]
 
         await polling_job.run()
 
         polling_job._gmail.send_email.assert_awaited_once()
         call_kwargs = polling_job._gmail.send_email.call_args.kwargs
         assert call_kwargs["to"] == "admin@test.com"
-        assert "2 onboarding(s) con error" in call_kwargs["subject"]
+        assert "1 completado(s)" in call_kwargs["subject"]
+        assert "Completados" in call_kwargs["body_html"]
+        assert "ACME SL" in call_kwargs["body_html"]
 
-    async def test_no_notifica_si_no_hay_failed(self, polling_job: PollingJob):
-        polling_job._repo.list_failed.return_value = []
+    async def test_envia_reporte_con_failed_bd(self, polling_job: PollingJob):
+        """Con failed acumulados en BD, envía reporte incluyéndolos."""
+        failed = _make_failed_record_with_steps()
+        polling_job._repo.list_failed.return_value = [failed]
 
+        await polling_job.run()
+
+        polling_job._gmail.send_email.assert_awaited_once()
+        call_kwargs = polling_job._gmail.send_email.call_args.kwargs
+        assert "pendiente(s) de resolver" in call_kwargs["subject"]
+        assert "Holded API 500" in call_kwargs["body_html"]
+        assert "Total con errores" in call_kwargs["body_html"]
+        # Verifica que muestra steps con nombres legibles
+        assert "Carpeta Drive" in call_kwargs["body_html"]
+        assert "Contacto Holded" in call_kwargs["body_html"]
+
+    async def test_reporte_incluye_errores_de_proceso(self, polling_job: PollingJob):
+        """Cuando process_deal lanza excepción, aparece en el reporte."""
+        deal = _make_enriched_deal(100)
+        polling_job._detector.detect_new_deals.return_value = [deal]
+        polling_job._manager.process_deal.side_effect = RuntimeError("Connection timeout")
+
+        await polling_job.run()
+
+        polling_job._gmail.send_email.assert_awaited_once()
+        call_kwargs = polling_job._gmail.send_email.call_args.kwargs
+        assert "1 con error" in call_kwargs["subject"]
+        assert "Connection timeout" in call_kwargs["body_html"]
+
+    async def test_reporte_incluye_waiting_technician(self, polling_job: PollingJob):
+        """Deals en WAITING_TECHNICIAN aparecen en el reporte."""
+        deal = _make_enriched_deal(100)
+        polling_job._detector.detect_new_deals.return_value = [deal]
+        polling_job._manager.process_deal.return_value = _make_record(
+            status=OnboardingStatus.WAITING_TECHNICIAN
+        )
+
+        await polling_job.run()
+
+        polling_job._gmail.send_email.assert_awaited_once()
+        call_kwargs = polling_job._gmail.send_email.call_args.kwargs
+        assert "esperando técnico" in call_kwargs["subject"]
+        assert "Esperando técnico" in call_kwargs["body_html"]
+
+    async def test_no_envia_email_sin_actividad(self, polling_job: PollingJob):
+        """Sin deals nuevos, sin pendientes, sin failed → no envía email."""
         await polling_job.run()
 
         polling_job._gmail.send_email.assert_not_awaited()
@@ -168,11 +233,68 @@ class TestPollingJobNotifications:
     async def test_email_error_no_crashea(self, polling_job: PollingJob):
         """Si el email de resumen falla, el ciclo no crashea."""
         polling_job._repo.list_failed.return_value = [
-            _make_record(status=OnboardingStatus.FAILED),
+            _make_failed_record_with_steps(),
         ]
         polling_job._gmail.send_email.side_effect = RuntimeError("SMTP error")
 
         await polling_job.run()  # No debe lanzar excepción
+
+    async def test_reporte_mixto_completados_y_errores(self, polling_job: PollingJob):
+        """Reporte con completados y errores muestra ambos."""
+        deal1 = _make_enriched_deal(100)
+        deal2 = _make_enriched_deal(200)
+        polling_job._detector.detect_new_deals.return_value = [deal1, deal2]
+        polling_job._manager.process_deal.side_effect = [
+            _make_record(deal_id=100, status=OnboardingStatus.COMPLETED),
+            RuntimeError("API error"),
+        ]
+
+        await polling_job.run()
+
+        call_kwargs = polling_job._gmail.send_email.call_args.kwargs
+        assert "1 completado(s)" in call_kwargs["subject"]
+        assert "1 con error" in call_kwargs["subject"]
+        assert "Completados" in call_kwargs["body_html"]
+        assert "Errores en este ciclo" in call_kwargs["body_html"]
+
+
+class TestCleanErrorMessage:
+    def test_parsea_json_hubspot(self):
+        """Extrae mensaje y scopes de un error JSON de HubSpot."""
+        from src.scheduler.polling_job import _clean_error_message
+
+        raw = (
+            'HubSpot 403: {"status":"error","message":"This app hasn\'t been granted all required scopes",'
+            '"correlationId":"f1abc06c-a32c-4e17-bfc6-1739c77b6eac",'
+            '"errors":[{"message":"One or more of the following scopes are required.",'
+            '"context":{"requiredGranularScopes":["crm.objects.companies.write"]}}],'
+            '"category":"MISSING_SCOPES"}'
+        )
+        result = _clean_error_message(raw)
+        assert "MISSING_SCOPES" in result
+        assert "crm.objects.companies.write" in result
+        # No debe contener el correlationId
+        assert "correlationId" not in result
+
+    def test_limpia_excepcion_no_controlada(self):
+        from src.scheduler.polling_job import _clean_error_message
+
+        raw = "Excepción no controlada: Connection refused"
+        result = _clean_error_message(raw)
+        assert result == "Connection refused"
+
+    def test_trunca_mensajes_largos(self):
+        from src.scheduler.polling_job import _clean_error_message
+
+        raw = "x" * 300
+        result = _clean_error_message(raw)
+        assert len(result) <= 203  # 200 + "..."
+
+    def test_texto_plano_sin_cambios(self):
+        from src.scheduler.polling_job import _clean_error_message
+
+        raw = "Timeout al conectar con Holded"
+        assert _clean_error_message(raw) == raw
 
 
 class TestNotifyCriticalError:

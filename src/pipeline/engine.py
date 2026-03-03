@@ -52,10 +52,29 @@ class PipelineEngine:
         await self._repo.update_status(record.id, OnboardingStatus.IN_PROGRESS)
         record.status = OnboardingStatus.IN_PROGRESS
 
+        # Steps ya completados en ejecuciones anteriores (para reintentos)
+        previously_completed = {
+            s.step_name for s in record.steps if s.status == StepStatus.COMPLETED
+        }
+
         failed_steps: list[str] = []
 
         for step in steps:
             step_log = log.bind(step=step.name.value)
+
+            # Skip automático: si el step ya completó en un intento anterior, no re-ejecutar
+            if step.name in previously_completed:
+                step_log.info("step_previously_completed_skipping")
+                step_record = StepRecord(
+                    onboarding_id=record.id,
+                    step_name=step.name,
+                    status=StepStatus.SKIPPED,
+                    result_data={"skipped": True, "reason": "previously_completed"},
+                    started_at=datetime.now(),
+                    completed_at=datetime.now(),
+                )
+                await self._repo.upsert_step(step_record)
+                continue
 
             # Marcar step como IN_PROGRESS en BD
             step_record = StepRecord(

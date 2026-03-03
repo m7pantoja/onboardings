@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS onboardings (
     hubspot_owner_id INTEGER,
     status          TEXT NOT NULL DEFAULT 'pending',
     current_step    TEXT,
+    last_notified_at TEXT,
     created_at      TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );

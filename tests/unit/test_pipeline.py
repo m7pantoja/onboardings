@@ -1,13 +1,13 @@
 """Tests para el PipelineEngine y OnboardingManager."""
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from src.models.deal import CompanyInfo, ContactPersonInfo, EnrichedDeal
 from src.models.enums import OnboardingStatus, StepName, StepStatus
-from src.models.onboarding import OnboardingRecord, TechnicianInfo
+from src.models.onboarding import OnboardingRecord, StepRecord, TechnicianInfo
 from src.models.sheets import Department, TeamMember
 from src.pipeline.engine import PipelineEngine
 from src.services.onboarding_manager import OnboardingManager
@@ -201,6 +201,75 @@ class TestPipelineEngine:
 
         assert result.status == OnboardingStatus.COMPLETED
 
+    async def test_step_ya_completado_se_salta_en_reintento(self) -> None:
+        """En un reintento, los steps COMPLETED previamente no se re-ejecutan."""
+        repo = AsyncMock()
+        engine = PipelineEngine(repo)
+
+        # Record con Slack ya completado en un intento anterior
+        record = _make_record(
+            status=OnboardingStatus.FAILED,
+            steps=[
+                StepRecord(
+                    onboarding_id=1,
+                    step_name=StepName.NOTIFY_SLACK,
+                    status=StepStatus.COMPLETED,
+                    result_data={"slack_ts": "1234"},
+                ),
+                StepRecord(
+                    onboarding_id=1,
+                    step_name=StepName.SEND_EMAIL,
+                    status=StepStatus.COMPLETED,
+                    result_data={"gmail_message_id": "msg_1"},
+                ),
+                StepRecord(
+                    onboarding_id=1,
+                    step_name=StepName.CREATE_HOLDED_CONTACT,
+                    status=StepStatus.FAILED,
+                    error_message="API down",
+                ),
+            ],
+        )
+        ctx = _make_ctx()
+
+        slack_step = _make_step(StepName.NOTIFY_SLACK)
+        email_step = _make_step(StepName.SEND_EMAIL)
+        holded_step = _make_step(StepName.CREATE_HOLDED_CONTACT)
+
+        result = await engine.run(record, ctx, [slack_step, email_step, holded_step])
+
+        # Slack y Email no se re-ejecutaron (ya estaban COMPLETED)
+        slack_step.run.assert_not_called()
+        email_step.run.assert_not_called()
+        # Holded sí se re-ejecutó (estaba FAILED)
+        holded_step.run.assert_called_once()
+        assert result.status == OnboardingStatus.COMPLETED
+
+    async def test_step_fallido_previo_se_reintenta(self) -> None:
+        """En un reintento, los steps FAILED previamente sí se re-ejecutan."""
+        repo = AsyncMock()
+        engine = PipelineEngine(repo)
+
+        record = _make_record(
+            status=OnboardingStatus.FAILED,
+            steps=[
+                StepRecord(
+                    onboarding_id=1,
+                    step_name=StepName.CREATE_DRIVE_FOLDER,
+                    status=StepStatus.FAILED,
+                    error_message="API timeout",
+                ),
+            ],
+        )
+        ctx = _make_ctx()
+
+        drive_step = _make_step(StepName.CREATE_DRIVE_FOLDER)
+
+        result = await engine.run(record, ctx, [drive_step])
+
+        drive_step.run.assert_called_once()
+        assert result.status == OnboardingStatus.COMPLETED
+
 
 # ── Tests OnboardingManager ──────────────────────────────────────
 
@@ -223,7 +292,6 @@ def _make_manager(
             "holded_client": AsyncMock(),
             "slack_client": AsyncMock(),
             "gmail_client": AsyncMock(),
-            "hubspot_client": AsyncMock(),
         },
         hubspot_portal_id=6575051,
     )
@@ -338,6 +406,56 @@ class TestOnboardingManagerProcessDeal:
         slack.send_dm.assert_called_once()
         args = slack.send_dm.call_args
         assert args.args[0] == "U_RESP"
+        repo.update_last_notified.assert_awaited_once_with(1)
+
+    async def test_waiting_no_renotifica_antes_de_2_dias(self) -> None:
+        """Si la última notificación fue hace menos de 2 días, no reenvía Slack."""
+        existing = _make_record(
+            status=OnboardingStatus.WAITING_TECHNICIAN,
+            last_notified_at=datetime.now() - timedelta(hours=12),
+        )
+        repo = AsyncMock()
+        repo.get_by_deal_id = AsyncMock(return_value=existing)
+
+        mapper = AsyncMock()
+        mapper.get_department = AsyncMock(return_value=Department.AS)
+        mapper.get_team_members = AsyncMock(return_value=[])
+
+        slack = AsyncMock()
+        manager = _make_manager(repo=repo, mapper=mapper, slack=slack)
+
+        deal = _make_enriched_deal(technicians=[])
+        result = await manager.process_deal(deal)
+
+        assert result.status == OnboardingStatus.WAITING_TECHNICIAN
+        slack.send_dm.assert_not_called()
+
+    async def test_waiting_renotifica_tras_2_dias(self) -> None:
+        """Si la última notificación fue hace 2+ días, reenvía recordatorio por Slack."""
+        existing = _make_record(
+            status=OnboardingStatus.WAITING_TECHNICIAN,
+            last_notified_at=datetime.now() - timedelta(days=3),
+        )
+        repo = AsyncMock()
+        repo.get_by_deal_id = AsyncMock(return_value=existing)
+
+        responsable = _make_team_member(is_responsable=True, slack_id="U_RESP")
+        mapper = AsyncMock()
+        mapper.get_department = AsyncMock(return_value=Department.AS)
+        mapper.get_team_members = AsyncMock(return_value=[])
+        mapper.get_responsable = AsyncMock(return_value=responsable)
+
+        slack = AsyncMock()
+        manager = _make_manager(repo=repo, mapper=mapper, slack=slack)
+
+        deal = _make_enriched_deal(technicians=[])
+        result = await manager.process_deal(deal)
+
+        assert result.status == OnboardingStatus.WAITING_TECHNICIAN
+        slack.send_dm.assert_called_once()
+        message = slack.send_dm.call_args.args[1]
+        assert "Recordatorio" in message
+        repo.update_last_notified.assert_awaited_once_with(existing.id)
 
     async def test_flujo_completo_con_tecnico(self) -> None:
         """Con técnico resuelto, se ejecuta el pipeline y se devuelve su resultado."""

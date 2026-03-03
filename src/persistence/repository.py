@@ -70,6 +70,7 @@ class OnboardingRepository:
             hubspot_owner_id=row["hubspot_owner_id"],
             status=OnboardingStatus(row["status"]),
             current_step=StepName(row["current_step"]) if row["current_step"] else None,
+            last_notified_at=datetime.fromisoformat(row["last_notified_at"]) if row["last_notified_at"] else None,
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
         )
@@ -140,6 +141,17 @@ class OnboardingRepository:
             )
             await db.commit()
 
+    async def update_last_notified(self, onboarding_id: int) -> None:
+        """Actualiza la fecha de última notificación al responsable."""
+        async with aiosqlite.connect(self._db_path) as db:
+            await db.execute(
+                """UPDATE onboardings
+                   SET last_notified_at = datetime('now'), updated_at = datetime('now')
+                   WHERE id = ?""",
+                (onboarding_id,),
+            )
+            await db.commit()
+
     async def upsert_step(self, step: StepRecord) -> None:
         """Inserta o actualiza el estado de un step."""
         async with aiosqlite.connect(self._db_path) as db:
@@ -179,6 +191,7 @@ class OnboardingRepository:
             for row in rows:
                 record = self._row_to_record(row)
                 record.technicians = await self._load_technicians(db, record.id)
+                record.steps = await self._load_steps(db, record.id)
                 records.append(record)
             return records
 
@@ -201,5 +214,6 @@ class OnboardingRepository:
             for row in rows:
                 record = self._row_to_record(row)
                 record.technicians = await self._load_technicians(db, record.id)
+                record.steps = await self._load_steps(db, record.id)
                 records.append(record)
             return records

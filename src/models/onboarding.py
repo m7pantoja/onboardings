@@ -37,6 +37,7 @@ class OnboardingRecord(BaseModel):
     technicians: list[TechnicianInfo] = Field(default_factory=list)
     status: OnboardingStatus = OnboardingStatus.PENDING
     current_step: StepName | None = None
+    last_notified_at: datetime | None = None
     created_at: datetime = Field(default_factory=datetime.now)
     updated_at: datetime = Field(default_factory=datetime.now)
     steps: list[StepRecord] = Field(default_factory=list)

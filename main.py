@@ -79,7 +79,6 @@ async def main() -> None:
                 "holded_client": holded_client,
                 "slack_client": slack_client,
                 "gmail_client": gmail_client,
-                "hubspot_client": hubspot_client,
             },
             hubspot_portal_id=settings.hubspot_portal_id,
         )

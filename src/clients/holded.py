@@ -46,20 +46,58 @@ class HoldedClient:
 
     # ── Métodos públicos ────────────────────────────────────────
 
+    async def find_contact_by_custom_id(self, custom_id: str) -> str | None:
+        """Busca un contacto por customId (NIF). Devuelve su ID o None."""
+        assert self._client is not None, "Usar como context manager: async with HoldedClient(...)"
+
+        response = await self._client.get(
+            "/contacts", params={"customId": custom_id}
+        )
+
+        if response.status_code >= 400:
+            raise HoldedError(
+                f"Holded {response.status_code}: {response.text}",
+                status_code=response.status_code,
+            )
+
+        contacts = response.json()
+        if contacts and isinstance(contacts, list) and len(contacts) > 0:
+            contact_id = str(contacts[0].get("id", ""))
+            logger.info(
+                "holded_contact_found_by_custom_id",
+                custom_id=custom_id,
+                contact_id=contact_id,
+            )
+            return contact_id
+
+        return None
+
+    async def find_or_create_contact(self, payload: dict[str, Any]) -> tuple[str, bool]:
+        """Busca un contacto por NIF (customId) o lo crea si no existe.
+
+        Devuelve (contact_id, created) donde created=True si se creó nuevo.
+        """
+        nif = payload.get("code", "").strip()
+
+        # Si tiene NIF, buscar primero por customId
+        if nif:
+            existing_id = await self.find_contact_by_custom_id(nif)
+            if existing_id:
+                return existing_id, False
+
+        # No existe: crear con customId = NIF para futuras búsquedas
+        if nif:
+            payload["customId"] = nif
+
+        data = await self._request("POST", "/contacts", json=payload)
+        contact_id = str(data.get("id", ""))
+        logger.info("holded_contact_created", contact_id=contact_id, name=payload.get("name"))
+        return contact_id, True
+
     async def create_contact(self, payload: dict[str, Any]) -> str:
         """Crea un contacto en Holded y devuelve su ID.
 
-        El payload debe seguir la estructura de la API de Holded:
-        {
-            "name": "...",
-            "type": "client",
-            "code": "NIF",
-            "email": "...",
-            "phone": "...",
-            "billAddress": {...},
-            "socialNetworks": {"website": "..."},
-            "contactPersons": [{...}],
-        }
+        DEPRECATED: usar find_or_create_contact para idempotencia.
         """
         data = await self._request("POST", "/contacts", json=payload)
         contact_id = data.get("id", "")

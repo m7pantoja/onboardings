@@ -169,14 +169,15 @@ class HubSpotClient:
         results = data.get("results", [])
         if not results:
             return None
-        return str(results[0]["toObjectId"])
+        first = results[0]
+        return str(first.get("toObjectId") or first["id"])
 
     async def get_company_contact_ids(self, company_id: str) -> list[str]:
         """Devuelve los contact_ids asociados a la empresa."""
         data = await self._request(
             "GET", f"/crm/v3/objects/companies/{company_id}/associations/contacts"
         )
-        return [str(r["toObjectId"]) for r in data.get("results", [])]
+        return [str(r.get("toObjectId") or r["id"]) for r in data.get("results", [])]
 
     async def get_contact(self, contact_id: str) -> dict[str, Any]:
         """Obtiene las propiedades de un contacto (persona de contacto + técnicos)."""

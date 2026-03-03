@@ -7,7 +7,6 @@ from typing import Any
 import structlog
 
 from src.clients.holded import HoldedClient, holded_contact_url
-from src.clients.hubspot import HubSpotClient
 from src.models.enums import StepName
 from src.steps.base import BaseStep, StepContext, StepResult
 
@@ -41,24 +40,17 @@ def _country_to_code(country: str | None) -> str:
 class CreateHoldedContactStep(BaseStep):
     """Crea un contacto (empresa) en Holded con datos de HubSpot.
 
-    Idempotencia: si `company.holded_id` ya tiene valor, se salta.
-    Tras crear, escribe `tl_holded_id` en HubSpot Company.
+    Idempotencia:
+    - En reintentos, el engine salta el step automáticamente si ya está COMPLETED en BD.
+    - Si la empresa tiene NIF, se busca por customId en Holded antes de crear.
     """
 
-    def __init__(self, holded_client: HoldedClient, hubspot_client: HubSpotClient) -> None:
+    def __init__(self, holded_client: HoldedClient) -> None:
         self._holded = holded_client
-        self._hubspot = hubspot_client
 
     @property
     def name(self) -> StepName:
         return StepName.CREATE_HOLDED_CONTACT
-
-    async def check_already_done(self, ctx: StepContext) -> bool:
-        if ctx.company and ctx.company.holded_id:
-            ctx.holded_contact_id = ctx.company.holded_id
-            ctx.holded_contact_url = holded_contact_url(ctx.company.holded_id)
-            return True
-        return False
 
     async def execute(self, ctx: StepContext) -> StepResult:
         log = logger.bind(deal_id=ctx.deal_id, company=ctx.company_name)
@@ -67,28 +59,30 @@ class CreateHoldedContactStep(BaseStep):
             return StepResult(success=False, error="No hay datos de empresa")
 
         payload = self._build_payload(ctx)
-        contact_id = await self._holded.create_contact(payload)
+        contact_id, created = await self._holded.find_or_create_contact(payload)
 
         ctx.holded_contact_id = contact_id
         ctx.holded_contact_url = holded_contact_url(contact_id)
 
-        # Write-back a HubSpot Company
-        await self._hubspot.update_company(
-            ctx.company.company_id,
-            {"tl_holded_id": contact_id},
-        )
-
-        log.info(
-            "holded_contact_created",
-            holded_id=contact_id,
-            company_id=ctx.company.company_id,
-        )
+        if created:
+            log.info(
+                "holded_contact_created",
+                holded_id=contact_id,
+                company_id=ctx.company.company_id,
+            )
+        else:
+            log.info(
+                "holded_contact_already_exists",
+                holded_id=contact_id,
+                company_id=ctx.company.company_id,
+            )
 
         return StepResult(
             success=True,
             data={
                 "holded_contact_id": contact_id,
                 "holded_contact_url": ctx.holded_contact_url,
+                "created": created,
             },
         )
 
