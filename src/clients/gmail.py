@@ -58,6 +58,7 @@ class GmailClient:
         subject: str,
         body_html: str,
         sender: str = "tech@leanfinance.es",
+        cc: list[str] | None = None,
     ) -> str:
         """Envía un email HTML y devuelve el message ID de Gmail."""
         assert self._client is not None, "Usar como context manager: async with GmailClient(...)"
@@ -66,6 +67,8 @@ class GmailClient:
         message["to"] = to
         message["from"] = sender
         message["subject"] = subject
+        if cc:
+            message["cc"] = ", ".join(cc)
 
         raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
 
@@ -82,5 +85,5 @@ class GmailClient:
 
         data: dict[str, Any] = response.json()
         message_id = data.get("id", "")
-        logger.info("gmail_email_sent", to=to, subject=subject, message_id=message_id)
+        logger.info("gmail_email_sent", to=to, cc=cc, subject=subject, message_id=message_id)
         return message_id

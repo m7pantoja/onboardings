@@ -274,6 +274,7 @@ class TestSendEmailStep:
         call_kwargs = gmail.send_email.call_args[1]
         assert call_kwargs["to"] == "esther@leanfinance.es"
         assert "Acme Corp" in call_kwargs["subject"]
+        assert call_kwargs["cc"] == ["lorena@leanfinance.es"]
 
     async def test_fails_without_technician(self) -> None:
         gmail = AsyncMock()

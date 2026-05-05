@@ -11,12 +11,19 @@ from src.steps.base import BaseStep, StepContext, StepResult
 
 logger = structlog.get_logger()
 
+DEFAULT_CC = ("lorena@leanfinance.es",)
+
 
 class SendEmailStep(BaseStep):
     """Envía email al técnico con enlaces a Drive, Holded y HubSpot."""
 
-    def __init__(self, gmail_client: GmailClient) -> None:
+    def __init__(
+        self,
+        gmail_client: GmailClient,
+        cc: tuple[str, ...] = DEFAULT_CC,
+    ) -> None:
         self._gmail = gmail_client
+        self._cc = list(cc)
 
     @property
     def name(self) -> StepName:
@@ -35,12 +42,14 @@ class SendEmailStep(BaseStep):
             to=ctx.technician.email,
             subject=subject,
             body_html=body_html,
+            cc=self._cc or None,
         )
 
         log.info(
             "email_sent_to_technician",
             technician=ctx.technician.nombre_corto,
             email=ctx.technician.email,
+            cc=self._cc,
             message_id=message_id,
         )
 
